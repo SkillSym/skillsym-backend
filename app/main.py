@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import auth, user, banner, audio, video, payment, admin
+from app.routers import settings
 from app.database import engine, Base
+from app.models.settings import Settings
 
 Base.metadata.create_all(bind=engine)
 
@@ -15,13 +17,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router,    prefix="/api/auth",    tags=["Auth"])
-app.include_router(user.router,    prefix="/api/user",    tags=["User"])
-app.include_router(banner.router,  prefix="/api/banner",  tags=["Banner"])
-app.include_router(audio.router,   prefix="/api/audio",   tags=["Audio"])
-app.include_router(video.router,   prefix="/api/video",   tags=["Video"])
-app.include_router(payment.router, prefix="/api/payment", tags=["Payment"])
-app.include_router(admin.router,   prefix="/api/admin",   tags=["Admin"])
+app.include_router(auth.router,     prefix="/api/auth",     tags=["Auth"])
+app.include_router(user.router,     prefix="/api/user",     tags=["User"])
+app.include_router(banner.router,   prefix="/api/banner",   tags=["Banner"])
+app.include_router(audio.router,    prefix="/api/audio",    tags=["Audio"])
+app.include_router(video.router,    prefix="/api/video",    tags=["Video"])
+app.include_router(payment.router,  prefix="/api/payment",  tags=["Payment"])
+app.include_router(admin.router,    prefix="/api/admin",    tags=["Admin"])
+app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 
 @app.get("/")
 def root():

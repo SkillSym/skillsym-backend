@@ -3,13 +3,19 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth import get_current_user
 from app.models.models import User, Usage, Wallet, Transaction
+from app.routers.settings import get_setting
 from datetime import datetime
 
 router = APIRouter()
 
-FREE_BANNERS_PER_MONTH = 30
-FREE_AUDIO_PER_MONTH   = 30
-FREE_VIDEO_SECONDS     = 45
+def get_limits(db: Session):
+    return {
+        "FREE_BANNERS_PER_MONTH": int(get_setting(db, "FREE_BANNERS_PER_MONTH")),
+        "FREE_AUDIO_PER_MONTH":   int(get_setting(db, "FREE_AUDIO_PER_MONTH")),
+        "FREE_VIDEO_PER_MONTH":   int(get_setting(db, "FREE_VIDEO_PER_MONTH")),
+        "FREE_AUDIO_SECONDS":     int(get_setting(db, "FREE_AUDIO_SECONDS")),
+        "FREE_VIDEO_SECONDS":     int(get_setting(db, "FREE_VIDEO_SECONDS")),
+    }
 
 def _reset_usage_if_new_month(db: Session, usage: Usage):
     current_month = datetime.now().strftime("%Y-%m")
@@ -36,14 +42,20 @@ def get_usage(user: User = Depends(get_current_user), db: Session = Depends(get_
     if not usage:
         return {}
     _reset_usage_if_new_month(db, usage)
+    limits = get_limits(db)
     return {
-        "banners_used":      usage.banners_used,
-        "banners_free_left": max(0, FREE_BANNERS_PER_MONTH - usage.banners_used),
-        "audio_used":        usage.audio_used,
-        "audio_free_left":   max(0, FREE_AUDIO_PER_MONTH - usage.audio_used),
-        "video_seconds_used": usage.video_seconds,
-        "video_free_left_sec": max(0, FREE_VIDEO_SECONDS - usage.video_seconds),
-        "month": usage.month_year,
+        "banners_used":        usage.banners_used,
+        "banners_free_left":   max(0, limits["FREE_BANNERS_PER_MONTH"] - usage.banners_used),
+        "banners_limit":       limits["FREE_BANNERS_PER_MONTH"],
+        "audio_used":          usage.audio_used,
+        "audio_free_left":     max(0, limits["FREE_AUDIO_PER_MONTH"] - usage.audio_used),
+        "audio_limit":         limits["FREE_AUDIO_PER_MONTH"],
+        "video_seconds_used":  usage.video_seconds,
+        "video_free_left_sec": max(0, limits["FREE_VIDEO_SECONDS"] - usage.video_seconds),
+        "video_limit":         limits["FREE_VIDEO_PER_MONTH"],
+        "free_audio_seconds":  limits["FREE_AUDIO_SECONDS"],
+        "free_video_seconds":  limits["FREE_VIDEO_SECONDS"],
+        "month":               usage.month_year,
     }
 
 @router.get("/wallet")

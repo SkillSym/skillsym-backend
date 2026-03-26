@@ -5,26 +5,29 @@ from app.database import get_db
 from app.auth import get_current_user
 from app.models.models import User, Usage, Wallet, Transaction, GenerationJob
 from app.ai_service import generate_audio, generate_marketing_text, translate_text, upload_to_cloudinary
-from app.routers.user import FREE_AUDIO_PER_MONTH, _reset_usage_if_new_month
+from app.routers.user import _reset_usage_if_new_month
+from app.routers.settings import get_setting
 
 router = APIRouter()
 
-FREE_MAX_SECONDS = 45
-
-VOICES = [
-    {"id": "female_formal",    "name": "Female – Formal"},
-    {"id": "male_formal",      "name": "Male – Formal"},
-    {"id": "female_energetic", "name": "Female – Energetic"},
-    {"id": "male_energetic",   "name": "Male – Energetic"},
-    {"id": "female_fun",       "name": "Female – Fun"},
-]
+def get_audio_cost(db: Session, requested_seconds: int) -> float:
+    """Calculate cost based on duration tiers"""
+    free_sec = int(get_setting(db, "FREE_AUDIO_SECONDS"))
+    if requested_seconds <= free_sec:
+        return 0.0
+    elif requested_seconds <= 30:
+        return float(get_setting(db, "AUDIO_PRICE_30SEC"))
+    elif requested_seconds <= 40:
+        return float(get_setting(db, "AUDIO_PRICE_40SEC"))
+    else:
+        return float(get_setting(db, "AUDIO_PRICE_60SEC"))
 
 class GenerateAudioRequest(BaseModel):
     script:       str = ""
     product_name: str = ""
     voice:        str = "female_formal"
     language:     str = "en"
-    background_music: bool = False
+    duration_sec: int = 20
 
 class SuggestScriptRequest(BaseModel):
     product_name: str
@@ -32,11 +35,16 @@ class SuggestScriptRequest(BaseModel):
 
 @router.get("/voices")
 def get_voices():
-    return {"voices": VOICES}
+    return {"voices": [
+        {"id": "female_formal",    "name": "Female Formal"},
+        {"id": "male_formal",      "name": "Male Formal"},
+        {"id": "female_energetic", "name": "Female Energetic"},
+        {"id": "male_energetic",   "name": "Male Energetic"},
+    ]}
 
 @router.post("/suggest-script")
 async def suggest_script(data: SuggestScriptRequest, user: User = Depends(get_current_user)):
-    script = await generate_marketing_text(data.product_name, f"audio ad with {data.tone} tone")
+    script = await generate_marketing_text(data.product_name, f"audio ad {data.tone} tone")
     return {"suggested_script": script}
 
 @router.post("/generate")
@@ -45,44 +53,58 @@ async def generate_audio_ad(
     user: User    = Depends(get_current_user),
     db:   Session = Depends(get_db)
 ):
+    free_limit   = int(get_setting(db, "FREE_AUDIO_PER_MONTH"))
+    free_seconds = int(get_setting(db, "FREE_AUDIO_SECONDS"))
+    requested_sec = min(max(data.duration_sec, 10), 60)
+
     usage = db.query(Usage).filter(Usage.user_id == user.id).first()
     _reset_usage_if_new_month(db, usage)
 
-    audio_free_left = FREE_AUDIO_PER_MONTH - usage.audio_used
-    cost = 0.0
+    audio_free_left = free_limit - usage.audio_used
 
+    # Calculate cost based on duration
+    cost = get_audio_cost(db, requested_sec)
+
+    # If over monthly free count — always charge pack price
     if audio_free_left <= 0:
+        cost = max(cost, float(get_setting(db, "AUDIO_PRICE_30SEC")))
+
+    if cost > 0:
         wallet = db.query(Wallet).filter(Wallet.user_id == user.id).first()
-        if not wallet or wallet.balance < 1.0:
+        if not wallet or wallet.balance < cost:
             raise HTTPException(402, detail={
-                "error": "Free limit reached",
-                "message": "30 free audio ads used. Add $1 for 30 more.",
-                "audio_used": usage.audio_used,
+                "error":   "Insufficient credits",
+                "message": f"This audio costs ${cost:.2f}. Your balance: ${wallet.balance:.2f if wallet else 0}",
+                "cost": cost,
             })
-        wallet.balance -= 1.0
-        cost = 1.0
-        db.add(Transaction(wallet_id=wallet.id, amount=-1.0, description="30 extra audio ads pack"))
-        usage.audio_used = 0
+        wallet.balance -= cost
+        db.add(Transaction(
+            wallet_id=wallet.id, amount=-cost,
+            description=f"Audio ad {requested_sec}sec"
+        ))
+        if audio_free_left <= 0:
+            usage.audio_used = 0
         db.commit()
 
-    # Prepare script
     script = data.script
     if not script and data.product_name:
         script = await generate_marketing_text(data.product_name, "audio ad")
     if not script:
         raise HTTPException(400, "Please provide a script or product name")
 
-    # Keep free version under 45 sec (roughly 150 words)
+    # Limit words based on duration (approx 2.5 words per second)
+    max_words = int(requested_sec * 2.5)
     words = script.split()
-    if cost == 0.0 and len(words) > 110:   # ~110 words ≈ 45 sec at normal pace
-        script = " ".join(words[:110])
+    if len(words) > max_words:
+        script = " ".join(words[:max_words])
 
     if data.language not in ("en", "english"):
         script = await translate_text(script, data.language)
 
     job = GenerationJob(
         user_id=user.id, job_type="audio", status="processing",
-        prompt=script, style=data.voice, language=data.language, cost=cost
+        prompt=script, style=data.voice, language=data.language,
+        duration_sec=requested_sec, cost=cost
     )
     db.add(job)
     db.commit()
@@ -91,18 +113,19 @@ async def generate_audio_ad(
     audio_bytes = await generate_audio(script, data.voice)
 
     if audio_bytes:
-        url = await upload_to_cloudinary(audio_bytes, "video", f"audio_{job.id}")  # Cloudinary uses 'video' for audio
+        url = await upload_to_cloudinary(audio_bytes, "video", f"audio_{job.id}")
         db.query(GenerationJob).filter(GenerationJob.id == job.id).update(
             {"status": "done", "result_url": url}
         )
         usage.audio_used += 1
         db.commit()
         return {
-            "status":       "done",
-            "job_id":       job.id,
-            "audio_url":    url,
-            "cost":         cost,
-            "audio_remaining": max(0, FREE_AUDIO_PER_MONTH - usage.audio_used),
+            "status":          "done",
+            "job_id":          job.id,
+            "audio_url":       url,
+            "cost":            cost,
+            "duration_sec":    requested_sec,
+            "audio_remaining": max(0, free_limit - usage.audio_used),
         }
     else:
         db.query(GenerationJob).filter(GenerationJob.id == job.id).update({"status": "failed"})
