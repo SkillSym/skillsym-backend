@@ -1,0 +1,15 @@
+DEFAULT_SETTINGS = {
+    "FREE_BANNERS_PER_MONTH": "20",
+    "FREE_AUDIO_PER_MONTH":   "20",
+    "FREE_VIDEO_PER_MONTH":   "20",
+    "FREE_AUDIO_SECONDS":     "20",
+    "FREE_VIDEO_SECONDS":     "20",
+    "BANNER_PRICE_PER_PACK":  "1.00",
+    "BANNER_PACK_SIZE":       "20",
+    "AUDIO_PRICE_30SEC":      "1.00",
+    "AUDIO_PRICE_40SEC":      "2.00",
+    "AUDIO_PRICE_60SEC":      "2.50",
+    "VIDEO_PRICE_30SEC":      "1.00",
+    "VIDEO_PRICE_40SEC":      "2.00",
+    "VIDEO_PRICE_60SEC":      "2.50",
+}
